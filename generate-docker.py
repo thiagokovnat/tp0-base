@@ -20,7 +20,7 @@ services:
       - PYTHONUNBUFFERED=1
       - LOGGING_LEVEL=DEBUG
     volumes:
-      - ./server/config.ini:/server/config.ini
+      - ./server/config.ini:/config.ini
     networks:
       - testing_net
 
@@ -37,7 +37,7 @@ services:
                 file.write(f"      - CLI_ID={i}\n")
                 file.write("      - CLI_LOG_LEVEL=DEBUG\n")
                 file.write("    volumes:\n")
-                file.write("      - ./client/config.yaml:/client/config.yaml\n")
+                file.write("      - ./client/config.yaml:/config.yaml\n")
                 file.write("    networks:\n")
                 file.write("      - testing_net\n")
                 file.write("    depends_on:\n")
