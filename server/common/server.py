@@ -14,7 +14,6 @@ class Server:
         logging.info('action: signal_received | result: success | signal: SIGTERM')
         self._running = False
         self._server_socket.close()
-        sys.exit(0)
 
     def run(self):
         """
