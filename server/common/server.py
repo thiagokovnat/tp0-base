@@ -1,5 +1,6 @@
 import socket
 import logging
+import signal
 
 
 class Server:
