@@ -11,7 +11,8 @@ class Server:
         self._server_socket.listen(listen_backlog)
         self._running = True 
         signal.signal(signal.SIGTERM, self.handle_sigterm)
-    def handle_sigterm(self):
+
+    def handle_sigterm(self, signum, frame):
         logging.info('action: signal_received | result: success | signal: SIGTERM')
         self._running = False
         self._server_socket.close()
