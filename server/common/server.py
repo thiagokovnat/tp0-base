@@ -28,6 +28,8 @@ class Server:
             client_sock = self.__accept_new_connection()
             self.__handle_client_connection(client_sock)
 
+        sys.exit(0)
+
     def __handle_client_connection(self, client_sock):
         """
         Read message from a specific client socket and closes the socket
