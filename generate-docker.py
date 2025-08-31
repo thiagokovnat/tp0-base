@@ -18,7 +18,6 @@ services:
     entrypoint: python3 /main.py
     environment:
       - PYTHONUNBUFFERED=1
-      - LOGGING_LEVEL=DEBUG
     volumes:
       - ./server/config.ini:/config.ini
     networks:
@@ -35,7 +34,6 @@ services:
                 file.write("    entrypoint: /client\n")
                 file.write("    environment:\n")
                 file.write(f"      - CLI_ID={i}\n")
-                file.write("      - CLI_LOG_LEVEL=DEBUG\n")
                 file.write("    volumes:\n")
                 file.write("      - ./client/config.yaml:/config.yaml\n")
                 file.write("    networks:\n")
