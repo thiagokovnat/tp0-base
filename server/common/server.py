@@ -16,6 +16,7 @@ class Server:
         logging.info('action: signal_received | result: success | signal: SIGTERM')
         self._running = False
         self._server_socket.close()
+        sys.exit(0)
 
     def run(self):
         """
@@ -27,10 +28,15 @@ class Server:
         """
 
         while self._running:
-            client_sock = self.__accept_new_connection()
-            self.__handle_client_connection(client_sock)
+            try:
+                client_sock = self.__accept_new_connection()
+                self.__handle_client_connection(client_sock)
+            except OSError as e:
+                if self._running:
+                    logging.error(f'action: accept_connection | result: fail | error: {e}')
+                break
 
-        sys.exit(0)
+        
 
     def __handle_client_connection(self, client_sock):
         """
