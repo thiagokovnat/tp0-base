@@ -38,6 +38,12 @@ func InitConfig() (*viper.Viper, error) {
 	v.BindEnv("loop", "amount")
 	v.BindEnv("log", "level")
 
+	_ = v.BindEnv("bet.nombre", "NOMBRE")
+	_ = v.BindEnv("bet.apellido", "APELLIDO")
+	_ = v.BindEnv("bet.documento", "DOCUMENTO")
+	_ = v.BindEnv("bet.nacimiento", "NACIMIENTO")
+	_ = v.BindEnv("bet.numero", "NUMERO")
+
 	// Try to read configuration from config file. If config file
 	// does not exists then ReadInConfig will fail but configuration
 	// can be loaded from the environment variables so we shouldn't
@@ -53,7 +59,23 @@ func InitConfig() (*viper.Viper, error) {
 		return nil, errors.Wrapf(err, "Could not parse CLI_LOOP_PERIOD env var as time.Duration.")
 	}
 
+	if err := validateBetConfig(v); err != nil {
+		return nil, err
+	}
+
 	return v, nil
+}
+
+func validateBetConfig(v *viper.Viper) error {
+	nombre := v.GetString("bet.nombre")
+	apellido := v.GetString("bet.apellido")
+	documento := v.GetString("bet.documento")
+	nacimiento := v.GetString("bet.nacimiento")
+	numero := v.GetString("bet.numero")
+	if nombre == "" || apellido == "" || documento == "" || nacimiento == "" || numero == "" {
+		return errors.New("Missing required bet env vars: NOMBRE, APELLIDO, DOCUMENTO, NACIMIENTO, NUMERO must all be set")
+	}
+	return nil
 }
 
 // InitLogger Receives the log level to be set in go-logging as a string. This method
@@ -81,12 +103,17 @@ func InitLogger(logLevel string) error {
 // PrintConfig Print all the configuration parameters of the program.
 // For debugging purposes only
 func PrintConfig(v *viper.Viper) {
-	log.Infof("action: config | result: success | client_id: %s | server_address: %s | loop_amount: %v | loop_period: %v | log_level: %s",
+	log.Infof("action: config | result: success | client_id: %s | server_address: %s | loop_amount: %v | loop_period: %v | log_level: %s | nombre: %s | apellido: %s | documento: %s | nacimiento: %s | numero: %s",
 		v.GetString("id"),
 		v.GetString("server.address"),
 		v.GetInt("loop.amount"),
 		v.GetDuration("loop.period"),
 		v.GetString("log.level"),
+		v.GetString("bet.nombre"),
+		v.GetString("bet.apellido"),
+		v.GetString("bet.documento"),
+		v.GetString("bet.nacimiento"),
+		v.GetString("bet.numero"),
 	)
 }
 
@@ -94,10 +121,12 @@ func main() {
 	v, err := InitConfig()
 	if err != nil {
 		log.Criticalf("%s", err)
+		os.Exit(1)
 	}
 
 	if err := InitLogger(v.GetString("log.level")); err != nil {
 		log.Criticalf("%s", err)
+		os.Exit(1)
 	}
 
 	// Print program config with debugging purposes
@@ -108,6 +137,11 @@ func main() {
 		ID:            v.GetString("id"),
 		LoopAmount:    v.GetInt("loop.amount"),
 		LoopPeriod:    v.GetDuration("loop.period"),
+		Nombre:        v.GetString("bet.nombre"),
+		Apellido:      v.GetString("bet.apellido"),
+		Documento:     v.GetString("bet.documento"),
+		Nacimiento:    v.GetString("bet.nacimiento"),
+		Numero:        v.GetString("bet.numero"),
 	}
 
 	client := common.NewClient(clientConfig)

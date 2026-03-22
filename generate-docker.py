@@ -1,16 +1,24 @@
 import sys
 
 
+DEFAULT_BET_ENV = {
+    "NOMBRE": "Santiago Lionel",
+    "APELLIDO": "Lorca",
+    "DOCUMENTO": "30904465",
+    "NACIMIENTO": "1999-03-17",
+    "NUMERO": "7574",
+}
+
 
 class DockerBuilder:
     def __init__(self, file_name, num_clients):
         self.file_name = file_name
         self.num_clients = num_clients
-    
+
     def build(self):
         with open(self.file_name, "w") as file:
-
-            header = """name: tp0
+            header = """
+name: tp0
 services:
   server:
     container_name: server
@@ -25,15 +33,16 @@ services:
 
 """
             file.write(header)
-            
-      
+
             for i in range(1, self.num_clients + 1):
                 file.write(f"  client{i}:\n")
                 file.write(f"    container_name: client{i}\n")
                 file.write("    image: client:latest\n")
                 file.write("    entrypoint: /client\n")
                 file.write("    environment:\n")
-                file.write(f"      - CLI_ID={i}\n")
+                file.write(f'      CLI_ID: "{i}"\n')
+                for key, value in DEFAULT_BET_ENV.items():
+                    file.write(f'      {key}: "{value}"\n')
                 file.write("    volumes:\n")
                 file.write("      - ./client/config.yaml:/config.yaml\n")
                 file.write("    networks:\n")
@@ -41,7 +50,7 @@ services:
                 file.write("    depends_on:\n")
                 file.write("      - server\n")
                 file.write("\n")
-            
+
             footer = """networks:
   testing_net:
     ipam:
@@ -51,20 +60,18 @@ services:
 """
             file.write(footer)
 
+
 def main():
     if len(sys.argv) != 3:
         print("Usage: python generate-docker.py <file_name> <num_clients>")
         sys.exit(1)
-    
+
     file_name = sys.argv[1]
     num_clients = int(sys.argv[2])
-    
+
     builder = DockerBuilder(file_name, num_clients)
     builder.build()
 
 
 if __name__ == "__main__":
     main()
-
-
-
