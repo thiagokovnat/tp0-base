@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 )
 
@@ -51,41 +52,63 @@ func (p *BetProtocol) sendAll(data []byte) error {
 	return nil
 }
 
-func (p *BetProtocol) SendBet(agencyID, nombre, apellido, documento, nacimiento, numero string) error {
-	payload := strings.Join([]string{
-		agencyID,
-		nombre,
-		apellido,
-		documento,
-		nacimiento,
-		numero,
-	}, "\n")
+func (p *BetProtocol) SendBatch(rows [][6]string) error {
+	if len(rows) < 1 {
+		return fmt.Errorf("batch must have at least one bet")
+	}
+	n := len(rows)
+	parts := make([]string, 0, 1+6*n)
+	parts = append(parts, strconv.Itoa(n))
+	for _, r := range rows {
+		for i := 0; i < 6; i++ {
+			parts = append(parts, r[i])
+		}
+	}
+	payload := strings.Join(parts, "\n")
 	body := []byte(payload)
-	if len(body) == 0 || len(body) > MaxPayload {
-		return fmt.Errorf("invalid payload length: %d", len(body))
+	if len(body) > MaxPayload {
+		return fmt.Errorf("payload too large: %d bytes (max %d)", len(body), MaxPayload)
 	}
 	header := make([]byte, 2)
 	binary.BigEndian.PutUint16(header, uint16(len(body)))
 	return p.sendAll(append(header, body...))
 }
 
-func (p *BetProtocol) RecvResult() (ok bool, dni string, numero string, err error) {
+func (p *BetProtocol) RecvBatchResult() (ok bool, count int, code string, err error) {
 	header, err := p.recvAll(2)
 	if err != nil {
-		return false, "", "", err
+		return false, 0, "", err
 	}
 	length := binary.BigEndian.Uint16(header)
 	if length == 0 || length > MaxPayload {
-		return false, "", "", fmt.Errorf("invalid response payload length: %d", length)
+		return false, 0, "", fmt.Errorf("invalid response payload length: %d", length)
 	}
 	payload, err := p.recvAll(int(length))
 	if err != nil {
-		return false, "", "", err
+		return false, 0, "", err
 	}
 	text := string(payload)
 	parts := strings.SplitN(text, "|", 3)
-	if len(parts) != 3 || parts[0] != "SUCCESS" {
-		return false, "", "", fmt.Errorf("unexpected response: %q", text)
+	if len(parts) < 2 {
+		return false, 0, "", fmt.Errorf("unexpected response: %q", text)
 	}
-	return true, parts[1], parts[2], nil
+	switch parts[0] {
+	case "BATCH_OK":
+		c, err := strconv.Atoi(parts[1])
+		if err != nil {
+			return false, 0, "", fmt.Errorf("BATCH_OK parse count: %w", err)
+		}
+		return true, c, "", nil
+	case "BATCH_FAIL":
+		if len(parts) != 3 {
+			return false, 0, "", fmt.Errorf("unexpected BATCH_FAIL: %q", text)
+		}
+		c, err := strconv.Atoi(parts[2])
+		if err != nil {
+			return false, 0, parts[1], fmt.Errorf("BATCH_FAIL parse count: %w", err)
+		}
+		return false, c, parts[1], nil
+	default:
+		return false, 0, "", fmt.Errorf("unexpected response: %q", text)
+	}
 }

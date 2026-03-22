@@ -1,26 +1,35 @@
-import socket
 import logging
+import re
 import signal
+import socket
 import sys
 
 from common.protocol import BetProtocol
 from common.utils import store_bets
 
+_INVALID_BATCH_SIZE_RE = re.compile(r"invalid batch size:\s*(\d+)", re.IGNORECASE)
+
+
+def _batch_count_from_value_error(err: ValueError) -> int:
+    msg = str(err)
+    m = _INVALID_BATCH_SIZE_RE.search(msg)
+    return int(m.group(1)) if m else 0
+
 
 class Server:
-    def __init__(self, port, listen_backlog):
+    def __init__(self, port, listen_backlog, batch_max_amount: int):
         # Initialize server socket
         self._server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._server_socket.bind(('', port))
         self._server_socket.listen(listen_backlog)
-        self._running = True 
+        self._running = True
+        self._batch_max_amount = batch_max_amount
         signal.signal(signal.SIGTERM, self.handle_sigterm)
 
     def handle_sigterm(self, signum, frame):
         logging.info('action: signal_received | result: success | signal: SIGTERM')
         self._running = False
         self._server_socket.close()
-        
 
     def run(self):
         """
@@ -40,29 +49,56 @@ class Server:
                     logging.error(f'action: accept_connection | result: fail | error: {e}')
                 break
         sys.exit(0)
-        
 
     def __handle_client_connection(self, client_sock):
         """
-        Receives a bet from the client and stores it
+        Receives a batch of bets from the client and stores them atomically.
 
         If a problem arises in the communication with the client, the
         client socket will also be closed
         """
+        proto = BetProtocol(client_sock)
         try:
             addr = client_sock.getpeername()
-            proto = BetProtocol(client_sock)
-            bet = proto.recv_bet()
-            store_bets([bet])
-            logging.info(
-                f'action: apuesta_almacenada | result: success | dni: {bet.document} | numero: {bet.number}'
-            )
-            proto.send_result(bet)
+            bets = proto.recv_batch(self._batch_max_amount)
+            n = len(bets)
+            try:
+                store_bets(bets)
+            except OSError as store_err:
+                logging.error(f'action: store_bets | result: fail | error: {store_err}')
+                logging.info(
+                    f'action: apuesta_recibida | result: fail | cantidad: {n}'
+                )
+                try:
+                    proto.send_batch_result(False, n, "STORE")
+                except (ConnectionError, OSError) as send_err:
+                    logging.error(f'action: send_batch_result | result: fail | error: {send_err}')
+                return
+            for bet in bets:
+                logging.info(
+                    f'action: apuesta_almacenada | result: success | dni: {bet.document} | numero: {bet.number}'
+                )
+            logging.info(f'action: apuesta_recibida | result: success | cantidad: {n}')
+            proto.send_batch_result(True, n)
             logging.debug(
-                f'action: bet_response_sent | result: success | ip: {addr[0]} | dni: {bet.document}'
+                f'action: batch_response_sent | result: success | ip: {addr[0]} | cantidad: {n}'
             )
-        except (ValueError, ConnectionError, OSError) as e:
-            logging.error(f'action: receive_bet | result: fail | error: {e}')
+        except ValueError as e:
+            msg = str(e)
+            if msg.lower().startswith("invalid batch size"):
+                count = _batch_count_from_value_error(e)
+                logging.error(msg)
+                logging.info(
+                    f'action: apuesta_recibida | result: fail | cantidad: {count}'
+                )
+                try:
+                    proto.send_batch_result(False, count, "INVALID")
+                except (ConnectionError, OSError) as send_err:
+                    logging.error(f'action: send_batch_result | result: fail | error: {send_err}')
+            else:
+                logging.error(f'action: receive_batch | result: fail | error: {e}')
+        except (ConnectionError, OSError) as e:
+            logging.error(f'action: receive_batch | result: fail | error: {e}')
         finally:
             client_sock.close()
 

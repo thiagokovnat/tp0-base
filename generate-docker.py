@@ -1,15 +1,6 @@
 import sys
 
 
-DEFAULT_BET_ENV = {
-    "NOMBRE": "Santiago Lionel",
-    "APELLIDO": "Lorca",
-    "DOCUMENTO": "30904465",
-    "NACIMIENTO": "1999-03-17",
-    "NUMERO": "7574",
-}
-
-
 class DockerBuilder:
     def __init__(self, file_name, num_clients):
         self.file_name = file_name
@@ -26,6 +17,7 @@ services:
     entrypoint: python3 /main.py
     environment:
       - PYTHONUNBUFFERED=1
+      - BATCH_MAX_AMOUNT=40
     volumes:
       - ./server/config.ini:/config.ini
     networks:
@@ -41,10 +33,11 @@ services:
                 file.write("    entrypoint: /client\n")
                 file.write("    environment:\n")
                 file.write(f'      CLI_ID: "{i}"\n')
-                for key, value in DEFAULT_BET_ENV.items():
-                    file.write(f'      {key}: "{value}"\n')
                 file.write("    volumes:\n")
                 file.write("      - ./client/config.yaml:/config.yaml\n")
+                file.write(
+                    f"      - ./.data/agency-{i}.csv:/.data/agency-{i}.csv\n"
+                )
                 file.write("    networks:\n")
                 file.write("      - testing_net\n")
                 file.write("    depends_on:\n")

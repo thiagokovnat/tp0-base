@@ -31,24 +31,50 @@ class BetProtocol:
                 raise ConnectionError("Connection closed before sending all bytes")
             view = view[sent:]
 
-    def recv_bet(self) -> Bet:
+    def recv_batch(self, max_batch_size: int) -> list[Bet]:
         length_bytes = self.recv_all(2)
         (length,) = struct.unpack("!H", length_bytes)
         if length == 0 or length > MAX_PAYLOAD:
-            raise ValueError("Invalid payload length")
+            raise ValueError("invalid batch size: 0 (bad payload length)")
         payload = self.recv_all(length)
-        text = payload.decode("utf-8")
-        parts = text.split("\n")
-        if len(parts) != 6:
-            raise ValueError("Expected exactly 6 newline-separated fields")
-        agency, first_name, last_name, document, birthdate, number = parts
+        text = payload.decode("utf-8").rstrip("\n\r")
+        lines = text.split("\n")
+        if not lines:
+            raise ValueError("invalid batch size: 0 (empty payload)")
         try:
-            return Bet(agency, first_name, last_name, document, birthdate, number)
-        except (ValueError, TypeError) as e:
-            raise ValueError(f"Invalid bet data: {e}") from e
+            n = int(lines[0].strip())
+        except ValueError as e:
+            raise ValueError("invalid batch size: 0 (could not parse count line)") from e
 
-    def send_result(self, bet: Bet) -> None:
-        payload = f"SUCCESS|{bet.document}|{bet.number}".encode("utf-8")
+        if n < 1:
+            raise ValueError(f"invalid batch size: {n} (must be at least 1)")
+        if n > max_batch_size:
+            raise ValueError(
+                f"invalid batch size: {n} (exceeds maximum {max_batch_size})"
+            )
+        expected_lines = 1 + 6 * n
+        if len(lines) != expected_lines:
+            raise ValueError(
+                f"invalid batch size: {n} (expected {expected_lines} lines, got {len(lines)})"
+            )
+        bets: list[Bet] = []
+        for i in range(n):
+            base = 1 + i * 6
+            agency, first_name, last_name, document, birthdate, number = lines[base : base + 6]
+            try:
+                bets.append(Bet(agency, first_name, last_name, document, birthdate, number))
+            except (ValueError, TypeError) as e:
+                raise ValueError(
+                    f"invalid batch size: {n} (invalid bet fields: {e})"
+                ) from e
+        return bets
+
+    def send_batch_result(self, success: bool, count: int, error_code: str | None = None) -> None:
+        if success:
+            payload = f"BATCH_OK|{count}".encode("utf-8")
+        else:
+            code = error_code or "ERROR"
+            payload = f"BATCH_FAIL|{code}|{count}".encode("utf-8")
         if len(payload) > MAX_PAYLOAD:
             raise ValueError("Response payload too large")
         header = struct.pack("!H", len(payload))

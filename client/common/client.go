@@ -14,15 +14,11 @@ var log = logging.MustGetLogger("log")
 
 // ClientConfig Configuration used by the client
 type ClientConfig struct {
-	ID            string
-	ServerAddress string
-	LoopAmount    int
-	LoopPeriod    time.Duration
-	Nombre        string
-	Apellido      string
-	Documento     string
-	Nacimiento    string
-	Numero        string
+	ID             string
+	ServerAddress  string
+	LoopPeriod     time.Duration
+	BatchMaxAmount int
+	DataFilePath   string
 }
 
 // Client Entity that encapsulates how
@@ -59,7 +55,21 @@ func (c *Client) createClientSocket() error {
 	return nil
 }
 
-// StartClientLoop Send messages to the client until some time threshold is met
+func chunkRows(rows [][6]string, batchSize int) [][][6]string {
+	if batchSize < 1 {
+		batchSize = 1
+	}
+	var chunks [][][6]string
+	for i := 0; i < len(rows); i += batchSize {
+		end := i + batchSize
+		if end > len(rows) {
+			end = len(rows)
+		}
+		chunks = append(chunks, rows[i:end])
+	}
+	return chunks
+}
+
 func (c *Client) StartClientLoop() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT)
@@ -74,43 +84,48 @@ func (c *Client) StartClientLoop() {
 		os.Exit(0)
 	}()
 
-	// There is an autoincremental msgID to identify every message sent
-	// Messages if the message amount threshold has not been surpassed
-	for msgID := 1; msgID <= c.config.LoopAmount && c.running; msgID++ {
-		// Create the connection the server in every loop iteration. Send an
+	rows, err := LoadBetsFromCSV(c.config.DataFilePath, c.config.ID)
+	if err != nil {
+		log.Criticalf("action: load_csv | result: fail | client_id: %v | error: %v", c.config.ID, err)
+		return
+	}
+
+	chunks := chunkRows(rows, c.config.BatchMaxAmount)
+	for chunkIdx, chunk := range chunks {
+		if !c.running {
+			return
+		}
 		if err := c.createClientSocket(); err != nil {
 			return
 		}
 
 		proto := NewBetProtocol(c.conn)
-		err := proto.SendBet(
-			c.config.ID,
-			c.config.Nombre,
-			c.config.Apellido,
-			c.config.Documento,
-			c.config.Nacimiento,
-			c.config.Numero,
-		)
+		err := proto.SendBatch(chunk)
 		if err != nil {
-			log.Errorf("action: send_bet | result: fail | client_id: %v | error: %v",
-				c.config.ID, err)
+			log.Errorf("action: send_batch | result: fail | client_id: %v | chunk: %d | error: %v",
+				c.config.ID, chunkIdx, err)
 			c.conn.Close()
 			return
 		}
 
-		ok, dni, num, err := proto.RecvResult()
+		ok, count, code, err := proto.RecvBatchResult()
 		c.conn.Close()
 		c.conn = nil
 
-		if err != nil || !ok {
-			log.Errorf("action: receive_result | result: fail | client_id: %v | error: %v",
-				c.config.ID, err)
+		if err != nil {
+			log.Errorf("action: receive_batch_result | result: fail | client_id: %v | chunk: %d | error: %v",
+				c.config.ID, chunkIdx, err)
+			return
+		}
+		if !ok {
+			log.Errorf("action: apuesta_enviada | result: fail | client_id: %v | cantidad: %d | code: %s",
+				c.config.ID, count, code)
 			return
 		}
 
-		log.Infof("action: apuesta_enviada | result: success | dni: %s | numero: %s", dni, num)
+		log.Infof("action: apuesta_enviada | result: success | client_id: %v | cantidad: %d",
+			c.config.ID, count)
 
-		// Wait a time between sending one message and the next one
 		time.Sleep(c.config.LoopPeriod)
 	}
 	log.Infof("action: loop_finished | result: success | client_id: %v", c.config.ID)

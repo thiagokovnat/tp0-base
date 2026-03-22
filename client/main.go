@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -35,14 +36,8 @@ func InitConfig() (*viper.Viper, error) {
 	v.BindEnv("id")
 	v.BindEnv("server", "address")
 	v.BindEnv("loop", "period")
-	v.BindEnv("loop", "amount")
 	v.BindEnv("log", "level")
-
-	_ = v.BindEnv("bet.nombre", "NOMBRE")
-	_ = v.BindEnv("bet.apellido", "APELLIDO")
-	_ = v.BindEnv("bet.documento", "DOCUMENTO")
-	_ = v.BindEnv("bet.nacimiento", "NACIMIENTO")
-	_ = v.BindEnv("bet.numero", "NUMERO")
+	_ = v.BindEnv("batch.maxAmount")
 
 	// Try to read configuration from config file. If config file
 	// does not exists then ReadInConfig will fail but configuration
@@ -53,29 +48,29 @@ func InitConfig() (*viper.Viper, error) {
 		fmt.Printf("Configuration could not be read from config file. Using env variables instead")
 	}
 
-	// Parse time.Duration variables and return an error if those variables cannot be parsed
-
 	if _, err := time.ParseDuration(v.GetString("loop.period")); err != nil {
 		return nil, errors.Wrapf(err, "Could not parse CLI_LOOP_PERIOD env var as time.Duration.")
 	}
 
-	if err := validateBetConfig(v); err != nil {
+	if err := validateClientConfig(v); err != nil {
 		return nil, err
 	}
 
 	return v, nil
 }
 
-func validateBetConfig(v *viper.Viper) error {
-	nombre := v.GetString("bet.nombre")
-	apellido := v.GetString("bet.apellido")
-	documento := v.GetString("bet.documento")
-	nacimiento := v.GetString("bet.nacimiento")
-	numero := v.GetString("bet.numero")
-	if nombre == "" || apellido == "" || documento == "" || nacimiento == "" || numero == "" {
-		return errors.New("Missing required bet env vars: NOMBRE, APELLIDO, DOCUMENTO, NACIMIENTO, NUMERO must all be set")
+func validateClientConfig(v *viper.Viper) error {
+	if v.GetInt("batch.maxAmount") < 1 {
+		return errors.New("batch.maxAmount must be >= 1")
+	}
+	if v.GetString("id") == "" {
+		return errors.New("client id (CLI_ID) is required")
 	}
 	return nil
+}
+
+func agencyDataPath(id string) string {
+	return filepath.Join(".data", fmt.Sprintf("agency-%s.csv", id))
 }
 
 // InitLogger Receives the log level to be set in go-logging as a string. This method
@@ -103,17 +98,14 @@ func InitLogger(logLevel string) error {
 // PrintConfig Print all the configuration parameters of the program.
 // For debugging purposes only
 func PrintConfig(v *viper.Viper) {
-	log.Infof("action: config | result: success | client_id: %s | server_address: %s | loop_amount: %v | loop_period: %v | log_level: %s | nombre: %s | apellido: %s | documento: %s | nacimiento: %s | numero: %s",
+	log.Infof(
+		"action: config | result: success | client_id: %s | server_address: %s | loop_period: %v | log_level: %s | batch_max_amount: %d | data_file: %s",
 		v.GetString("id"),
 		v.GetString("server.address"),
-		v.GetInt("loop.amount"),
 		v.GetDuration("loop.period"),
 		v.GetString("log.level"),
-		v.GetString("bet.nombre"),
-		v.GetString("bet.apellido"),
-		v.GetString("bet.documento"),
-		v.GetString("bet.nacimiento"),
-		v.GetString("bet.numero"),
+		v.GetInt("batch.maxAmount"),
+		agencyDataPath(v.GetString("id")),
 	)
 }
 
@@ -133,15 +125,11 @@ func main() {
 	PrintConfig(v)
 
 	clientConfig := common.ClientConfig{
-		ServerAddress: v.GetString("server.address"),
-		ID:            v.GetString("id"),
-		LoopAmount:    v.GetInt("loop.amount"),
-		LoopPeriod:    v.GetDuration("loop.period"),
-		Nombre:        v.GetString("bet.nombre"),
-		Apellido:      v.GetString("bet.apellido"),
-		Documento:     v.GetString("bet.documento"),
-		Nacimiento:    v.GetString("bet.nacimiento"),
-		Numero:        v.GetString("bet.numero"),
+		ServerAddress:  v.GetString("server.address"),
+		ID:             v.GetString("id"),
+		LoopPeriod:     v.GetDuration("loop.period"),
+		BatchMaxAmount: v.GetInt("batch.maxAmount"),
+		DataFilePath:   agencyDataPath(v.GetString("id")),
 	}
 
 	client := common.NewClient(clientConfig)
