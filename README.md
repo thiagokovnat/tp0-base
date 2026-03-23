@@ -178,3 +178,27 @@ Se espera que se redacte una sección del README en donde se indique cómo ejecu
 Se proveen [pruebas automáticas](https://github.com/7574-sistemas-distribuidos/tp0-tests) de caja negra. Se exige que la resolución de los ejercicios pase tales pruebas, o en su defecto que las discrepancias sean justificadas y discutidas con los docentes antes del día de la entrega. El incumplimiento de las pruebas es condición de desaprobación, pero su cumplimiento no es suficiente para la aprobación. Respetar las entradas de log planteadas en los ejercicios, pues son las que se chequean en cada uno de los tests.
 
 La corrección personal tendrá en cuenta la calidad del código entregado y casos de error posibles, se manifiesten o no durante la ejecución del trabajo práctico. Se pide a los alumnos leer atentamente y **tener en cuenta** los criterios de corrección informados  [en el campus](https://campusgrado.fi.uba.ar/mod/page/view.php?id=73393).
+
+
+## Solución
+
+Los ejercicios se desarrollan en ramas `ej1` … `ej8`.
+
+### Protocolo de comunicación
+
+La comunicación es **TCP**. Cada mensaje es un **frame**: 2 bytes en orden de red (`unsigned short`) con la longitud del cuerpo, seguidos del **payload** (`BetProtocol` en el servidor).
+
+- **Lote de apuestas**: el primer frame contiene texto con una primera línea numérica (`n`) y `6n` líneas con los datos de cada apuesta; el servidor persiste y responde con el resultado del batch.
+- **Mensajes de control**: texto del que se obtiene la **agencia** y la intención — notificación de fin de envío y consulta de ganadores por agencia.
+
+### Concurrencia y sincronización
+
+El servidor **acepta** conexiones en un bucle y delega cada cliente a un **hilo**, tal que nuevas conexiones no quedan bloqueadas mientras se procesa otra. Ante **SIGTERM** se cierra el socket de escucha y se espera la finalización de los hilos activos (join con timeout).
+
+Los accesos a recursos compartidos se serializan con **locks**:
+
+- Un lock protege **`store_bets` / `load_bets`**.
+- Otro lock protege el **estado del sorteo** (agencias notificadas, flag de sorteo completado, mapa de ganadores por agencia). El sorteo pesado se hace fuera del lock de estado cuando ya corresponde, leyendo apuestas bajo el lock de persistencia, y se evita ejecutar el sorteo dos veces si varias notificaciones llegan casi a la vez (doble verificación del estado).
+
+En Python el **GIL** limita el paralelismo real de código CPU-bound en un solo proceso aunque este sistema se beneficia igualmente ya que es I/O bound, es decir, la mayoria del tiempo se pasa en operaciones I/O donde un sistema con Threading funciona incluso con el GIL. Python 3.14 ofrece una versión sin GIL aunque aún esta de forma experimental. 
+

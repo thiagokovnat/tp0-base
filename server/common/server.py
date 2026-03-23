@@ -3,6 +3,7 @@ import re
 import signal
 import socket
 import sys
+import threading
 from typing import Optional
 
 from common.protocol import BetProtocol
@@ -30,6 +31,9 @@ class Server:
         self._notified_agencies: set[int] = set()
         self._sorted_done = False
         self._winners_by_agency: dict[int, list[str]] = {}
+        self._bets_lock = threading.Lock()
+        self._state_lock = threading.Lock()
+        self._client_threads: list[threading.Thread] = []
         signal.signal(signal.SIGTERM, self.handle_sigterm)
 
     def handle_sigterm(self, signum, frame):
@@ -49,11 +53,15 @@ class Server:
         while self._running:
             try:
                 client_sock = self.__accept_new_connection()
-                self.__handle_client_connection(client_sock)
+                th = threading.Thread(target=self.__handle_client_connection, args=(client_sock,))
+                th.start()
+                self._client_threads.append(th)
             except OSError as e:
                 if self._running:
                     logging.error(f'action: accept_connection | result: fail | error: {e}')
                 break
+        for th in self._client_threads:
+            th.join(timeout=2.0)
         sys.exit(0)
 
     def __extract_agency(self, text: str) -> Optional[int]:
@@ -89,17 +97,22 @@ class Server:
         )
 
     def __run_draw_if_ready(self):
-        if self._sorted_done:
-            return
-        if len(self._notified_agencies) < self._n_agencies:
-            return
+        with self._state_lock:
+            if self._sorted_done:
+                return
+            if len(self._notified_agencies) < self._n_agencies:
+                return
         winners_by_agency: dict[int, list[str]] = {}
-        for bet in load_bets():
-            if has_won(bet):
-                winners_by_agency.setdefault(bet.agency, []).append(bet.document)
-        self._winners_by_agency = winners_by_agency
-        self._sorted_done = True
-        logging.info('action: sorteo | result: success')
+        with self._bets_lock:
+            for bet in load_bets():
+                if has_won(bet):
+                    winners_by_agency.setdefault(bet.agency, []).append(bet.document)
+        with self._state_lock:
+            if self._sorted_done:
+                return
+            self._winners_by_agency = winners_by_agency
+            self._sorted_done = True
+            logging.info('action: sorteo | result: success')
 
     def __handle_client_connection(self, client_sock):
         proto = BetProtocol(client_sock)
@@ -113,17 +126,20 @@ class Server:
                     proto.send_frame_text("ERROR|INVALID_AGENCY")
                     return
                 if self.__is_winners_query(text):
-                    if not self._sorted_done:
+                    with self._state_lock:
+                        sorted_done = self._sorted_done
+                        winners = list(self._winners_by_agency.get(agency, []))
+                    if not sorted_done:
                         proto.send_frame_text("WINNERS_PENDING")
                         return
-                    winners = self._winners_by_agency.get(agency, [])
                     count = len(winners)
                     winners_payload = ",".join(winners)
                     proto.send_frame_text(f"WINNERS_OK|{count}|{winners_payload}")
                     return
                 if self.__is_finish_notification(text):
                     logging.info(f"action: finish_notification | result: success | agency: {agency}")
-                    self._notified_agencies.add(agency)
+                    with self._state_lock:
+                        self._notified_agencies.add(agency)
                     self.__run_draw_if_ready()
                     proto.send_frame_text(f"NOTIFY_OK|{agency}")
                     return
@@ -131,7 +147,8 @@ class Server:
                 return
             n = len(bets)
             try:
-                store_bets(bets)
+                with self._bets_lock:
+                    store_bets(bets)
             except OSError as store_err:
                 logging.error(f'action: store_bets | result: fail | error: {store_err}')
                 logging.info(
