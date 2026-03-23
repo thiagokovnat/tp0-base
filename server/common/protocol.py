@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import socket
 import struct
+from typing import Optional
 
 from common.utils import Bet
 
@@ -31,13 +32,25 @@ class BetProtocol:
                 raise ConnectionError("Connection closed before sending all bytes")
             view = view[sent:]
 
-    def recv_batch(self, max_batch_size: int) -> list[Bet]:
+    def recv_frame(self) -> bytes:
         length_bytes = self.recv_all(2)
         (length,) = struct.unpack("!H", length_bytes)
         if length == 0 or length > MAX_PAYLOAD:
             raise ValueError("invalid batch size: 0 (bad payload length)")
-        payload = self.recv_all(length)
-        text = payload.decode("utf-8").rstrip("\n\r")
+        return self.recv_all(length)
+
+    def recv_frame_text(self) -> str:
+        return self.recv_frame().decode("utf-8")
+
+    def send_frame_text(self, text: str) -> None:
+        payload = text.encode("utf-8")
+        if len(payload) > MAX_PAYLOAD:
+            raise ValueError("Response payload too large")
+        header = struct.pack("!H", len(payload))
+        self.send_all(header + payload)
+
+    def parse_batch_payload(self, text: str, max_batch_size: int) -> list[Bet]:
+        text = text.rstrip("\n\r")
         lines = text.split("\n")
         if not lines:
             raise ValueError("invalid batch size: 0 (empty payload)")
@@ -69,7 +82,22 @@ class BetProtocol:
                 ) from e
         return bets
 
-    def send_batch_result(self, success: bool, count: int, error_code: str | None = None) -> None:
+    def try_parse_batch_payload(self, text: str, max_batch_size: int) -> Optional[list[Bet]]:
+        lines = text.rstrip("\n\r").split("\n")
+        if not lines:
+            return None
+        try:
+            int(lines[0].strip())
+        except ValueError:
+            return None
+        return self.parse_batch_payload(text, max_batch_size)
+
+    def recv_batch(self, max_batch_size: int) -> list[Bet]:
+        payload = self.recv_frame()
+        text = payload.decode("utf-8")
+        return self.parse_batch_payload(text, max_batch_size)
+
+    def send_batch_result(self, success: bool, count: int, error_code: Optional[str] = None) -> None:
         if success:
             payload = f"BATCH_OK|{count}".encode("utf-8")
         else:

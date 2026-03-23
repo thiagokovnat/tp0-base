@@ -70,6 +70,48 @@ func chunkRows(rows [][6]string, batchSize int) [][][6]string {
 	return chunks
 }
 
+func (c *Client) notifyFinished() error {
+	if err := c.createClientSocket(); err != nil {
+		return err
+	}
+	proto := NewBetProtocol(c.conn)
+	err := proto.SendFinishedNotification(c.config.ID)
+	if err != nil {
+		c.conn.Close()
+		c.conn = nil
+		return err
+	}
+	err = proto.RecvNotifyResult()
+	c.conn.Close()
+	c.conn = nil
+	return err
+}
+
+func (c *Client) queryWinnersWithRetry() (int, error) {
+	for c.running {
+		if err := c.createClientSocket(); err != nil {
+			return 0, err
+		}
+		proto := NewBetProtocol(c.conn)
+		if err := proto.SendWinnersQuery(c.config.ID); err != nil {
+			c.conn.Close()
+			c.conn = nil
+			return 0, err
+		}
+		status, count, err := proto.RecvWinnersResult()
+		c.conn.Close()
+		c.conn = nil
+		if err != nil {
+			return 0, err
+		}
+		if status == "OK" {
+			return count, nil
+		}
+		time.Sleep(c.config.LoopPeriod)
+	}
+	return 0, nil
+}
+
 func (c *Client) StartClientLoop() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT)
@@ -129,4 +171,14 @@ func (c *Client) StartClientLoop() {
 		time.Sleep(c.config.LoopPeriod)
 	}
 	log.Infof("action: loop_finished | result: success | client_id: %v", c.config.ID)
+	if err := c.notifyFinished(); err != nil {
+		log.Errorf("action: notify_finished | result: fail | client_id: %v | error: %v", c.config.ID, err)
+		return
+	}
+	count, err := c.queryWinnersWithRetry()
+	if err != nil {
+		log.Errorf("action: consulta_ganadores | result: fail | client_id: %v | error: %v", c.config.ID, err)
+		return
+	}
+	log.Infof("action: consulta_ganadores | result: success | cant_ganadores: %d", count)
 }

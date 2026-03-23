@@ -29,6 +29,12 @@ def initialize_config():
         config_params["batch_max_amount"] = int(
             os.getenv("SERVER_BATCH_MAX_AMOUNT", config["DEFAULT"]["BATCH_MAX_AMOUNT"])
         )
+        config_params["agencies_amount"] = int(
+            os.getenv(
+                "SERVER_AGENCIES_AMOUNT",
+                config["DEFAULT"].get("AGENCIES_AMOUNT", "5"),
+            )
+        )
     except KeyError as e:
         raise KeyError("Key was not found. Error: {} .Aborting server".format(e))
     except ValueError as e:
@@ -36,6 +42,8 @@ def initialize_config():
 
     if config_params["batch_max_amount"] < 1:
         raise ValueError("BATCH_MAX_AMOUNT must be >= 1")
+    if config_params["agencies_amount"] < 1:
+        raise ValueError("AGENCIES_AMOUNT must be >= 1")
 
     return config_params
 
@@ -46,6 +54,7 @@ def main():
     port = config_params["port"]
     listen_backlog = config_params["listen_backlog"]
     batch_max_amount = config_params["batch_max_amount"]
+    agencies_amount = config_params["agencies_amount"]
 
     initialize_log(logging_level)
 
@@ -54,11 +63,11 @@ def main():
     logging.debug(
         f"action: config | result: success | port: {port} | "
         f"listen_backlog: {listen_backlog} | logging_level: {logging_level} | "
-        f"batch_max_amount: {batch_max_amount}"
+        f"batch_max_amount: {batch_max_amount} | agencies_amount: {agencies_amount}"
     )
 
     # Initialize server and start server loop
-    server = Server(port, listen_backlog, batch_max_amount)
+    server = Server(port, listen_backlog, batch_max_amount, agencies_amount)
     server.run()
 
 def initialize_log(logging_level):

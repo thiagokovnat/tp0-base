@@ -52,6 +52,32 @@ func (p *BetProtocol) sendAll(data []byte) error {
 	return nil
 }
 
+func (p *BetProtocol) SendFrameText(text string) error {
+	body := []byte(text)
+	if len(body) == 0 || len(body) > MaxPayload {
+		return fmt.Errorf("payload too large: %d bytes (max %d)", len(body), MaxPayload)
+	}
+	header := make([]byte, 2)
+	binary.BigEndian.PutUint16(header, uint16(len(body)))
+	return p.sendAll(append(header, body...))
+}
+
+func (p *BetProtocol) RecvFrameText() (string, error) {
+	header, err := p.recvAll(2)
+	if err != nil {
+		return "", err
+	}
+	length := binary.BigEndian.Uint16(header)
+	if length == 0 || length > MaxPayload {
+		return "", fmt.Errorf("invalid response payload length: %d", length)
+	}
+	payload, err := p.recvAll(int(length))
+	if err != nil {
+		return "", err
+	}
+	return string(payload), nil
+}
+
 func (p *BetProtocol) SendBatch(rows [][6]string) error {
 	if len(rows) < 1 {
 		return fmt.Errorf("batch must have at least one bet")
@@ -74,20 +100,52 @@ func (p *BetProtocol) SendBatch(rows [][6]string) error {
 	return p.sendAll(append(header, body...))
 }
 
+func (p *BetProtocol) SendFinishedNotification(clientID string) error {
+	return p.SendFrameText(fmt.Sprintf("NOTIFY_FINISHED|AGENCY=%s", clientID))
+}
+
+func (p *BetProtocol) RecvNotifyResult() error {
+	text, err := p.RecvFrameText()
+	if err != nil {
+		return err
+	}
+	if !strings.HasPrefix(text, "NOTIFY_OK|") {
+		return fmt.Errorf("unexpected notify response: %q", text)
+	}
+	return nil
+}
+
+func (p *BetProtocol) SendWinnersQuery(clientID string) error {
+	return p.SendFrameText(fmt.Sprintf("QUERY_WINNERS|AGENCY=%s", clientID))
+}
+
+func (p *BetProtocol) RecvWinnersResult() (status string, count int, err error) {
+	text, err := p.RecvFrameText()
+	if err != nil {
+		return "", 0, err
+	}
+	if text == "WINNERS_PENDING" {
+		return "PENDING", 0, nil
+	}
+	parts := strings.SplitN(text, "|", 3)
+	if len(parts) < 2 {
+		return "", 0, fmt.Errorf("unexpected winners response: %q", text)
+	}
+	if parts[0] != "WINNERS_OK" {
+		return "", 0, fmt.Errorf("unexpected winners response: %q", text)
+	}
+	c, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return "", 0, fmt.Errorf("WINNERS_OK parse count: %w", err)
+	}
+	return "OK", c, nil
+}
+
 func (p *BetProtocol) RecvBatchResult() (ok bool, count int, code string, err error) {
-	header, err := p.recvAll(2)
+	text, err := p.RecvFrameText()
 	if err != nil {
 		return false, 0, "", err
 	}
-	length := binary.BigEndian.Uint16(header)
-	if length == 0 || length > MaxPayload {
-		return false, 0, "", fmt.Errorf("invalid response payload length: %d", length)
-	}
-	payload, err := p.recvAll(int(length))
-	if err != nil {
-		return false, 0, "", err
-	}
-	text := string(payload)
 	parts := strings.SplitN(text, "|", 3)
 	if len(parts) < 2 {
 		return false, 0, "", fmt.Errorf("unexpected response: %q", text)

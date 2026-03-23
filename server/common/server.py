@@ -3,11 +3,14 @@ import re
 import signal
 import socket
 import sys
+from typing import Optional
 
 from common.protocol import BetProtocol
-from common.utils import store_bets
+from common.utils import has_won, load_bets, store_bets
 
 _INVALID_BATCH_SIZE_RE = re.compile(r"invalid batch size:\s*(\d+)", re.IGNORECASE)
+_AGENCY_RE = re.compile(r"(?:agency|agencia|client|cliente|id)\D*(\d+)", re.IGNORECASE)
+_INT_RE = re.compile(r"\b(\d+)\b")
 
 
 def _batch_count_from_value_error(err: ValueError) -> int:
@@ -17,13 +20,16 @@ def _batch_count_from_value_error(err: ValueError) -> int:
 
 
 class Server:
-    def __init__(self, port, listen_backlog, batch_max_amount: int):
-        # Initialize server socket
+    def __init__(self, port, listen_backlog, batch_max_amount: int, n_agencies: int):
         self._server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._server_socket.bind(('', port))
         self._server_socket.listen(listen_backlog)
         self._running = True
         self._batch_max_amount = batch_max_amount
+        self._n_agencies = n_agencies
+        self._notified_agencies: set[int] = set()
+        self._sorted_done = False
+        self._winners_by_agency: dict[int, list[str]] = {}
         signal.signal(signal.SIGTERM, self.handle_sigterm)
 
     def handle_sigterm(self, signum, frame):
@@ -50,17 +56,79 @@ class Server:
                 break
         sys.exit(0)
 
-    def __handle_client_connection(self, client_sock):
-        """
-        Receives a batch of bets from the client and stores them atomically.
+    def __extract_agency(self, text: str) -> Optional[int]:
+        match = _AGENCY_RE.search(text)
+        if match:
+            agency = int(match.group(1))
+            if 1 <= agency <= self._n_agencies:
+                return agency
+        for match in _INT_RE.finditer(text):
+            agency = int(match.group(1))
+            if 1 <= agency <= self._n_agencies:
+                return agency
+        return None
 
-        If a problem arises in the communication with the client, the
-        client socket will also be closed
-        """
+    def __is_winners_query(self, text: str) -> bool:
+        lowered = text.lower()
+        return (
+            "ganador" in lowered
+            or "winner" in lowered
+            or "consulta" in lowered
+            or "winners" in lowered
+        )
+
+    def __is_finish_notification(self, text: str) -> bool:
+        lowered = text.lower()
+        return (
+            "finish" in lowered
+            or "final" in lowered
+            or "notify" in lowered
+            or "notific" in lowered
+            or "done" in lowered
+            or "complete" in lowered
+        )
+
+    def __run_draw_if_ready(self):
+        if self._sorted_done:
+            return
+        if len(self._notified_agencies) < self._n_agencies:
+            return
+        winners_by_agency: dict[int, list[str]] = {}
+        for bet in load_bets():
+            if has_won(bet):
+                winners_by_agency.setdefault(bet.agency, []).append(bet.document)
+        self._winners_by_agency = winners_by_agency
+        self._sorted_done = True
+        logging.info('action: sorteo | result: success')
+
+    def __handle_client_connection(self, client_sock):
         proto = BetProtocol(client_sock)
         try:
             addr = client_sock.getpeername()
-            bets = proto.recv_batch(self._batch_max_amount)
+            text = proto.recv_frame_text()
+            bets = proto.try_parse_batch_payload(text, self._batch_max_amount)
+            if bets is None:
+                agency = self.__extract_agency(text)
+                if agency is None:
+                    proto.send_frame_text("ERROR|INVALID_AGENCY")
+                    return
+                if self.__is_winners_query(text):
+                    if not self._sorted_done:
+                        proto.send_frame_text("WINNERS_PENDING")
+                        return
+                    winners = self._winners_by_agency.get(agency, [])
+                    count = len(winners)
+                    winners_payload = ",".join(winners)
+                    proto.send_frame_text(f"WINNERS_OK|{count}|{winners_payload}")
+                    return
+                if self.__is_finish_notification(text):
+                    logging.info(f"action: finish_notification | result: success | agency: {agency}")
+                    self._notified_agencies.add(agency)
+                    self.__run_draw_if_ready()
+                    proto.send_frame_text(f"NOTIFY_OK|{agency}")
+                    return
+                proto.send_frame_text("ERROR|UNKNOWN_ACTION")
+                return
             n = len(bets)
             try:
                 store_bets(bets)
@@ -71,7 +139,7 @@ class Server:
                 )
                 try:
                     proto.send_batch_result(False, n, "STORE")
-                except (ConnectionError, OSError) as send_err:
+                except (ConnectionError, OSError, ValueError) as send_err:
                     logging.error(f'action: send_batch_result | result: fail | error: {send_err}')
                 return
             for bet in bets:
@@ -93,7 +161,7 @@ class Server:
                 )
                 try:
                     proto.send_batch_result(False, count, "INVALID")
-                except (ConnectionError, OSError) as send_err:
+                except (ConnectionError, OSError, ValueError) as send_err:
                     logging.error(f'action: send_batch_result | result: fail | error: {send_err}')
             else:
                 logging.error(f'action: receive_batch | result: fail | error: {e}')

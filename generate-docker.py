@@ -18,12 +18,13 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - BATCH_MAX_AMOUNT=40
+      - SERVER_AGENCIES_AMOUNT={num_clients}
     volumes:
       - ./server/config.ini:/config.ini
     networks:
       - testing_net
 
-"""
+""".format(num_clients=self.num_clients)
             file.write(header)
 
             for i in range(1, self.num_clients + 1):
